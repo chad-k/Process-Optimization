@@ -1,16 +1,10 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Feb 16 16:42:41 2026
-
-@author: chad
-"""
-
 # app.py
 # Process Parameter Optimization (per part_number + machine_number)
 # Repo preset: chad-k/Process-Optimization
 # - Default: use repo files in /data
 # - Optional: upload CSVs instead
-# - Choose models (LR / RF / SVR), tune bounds + tolerance
+# - Auto-suggest bounds from historical data (editable)
+# - Choose models (LR / RF / SVR), tune tolerance
 # - Download optimized_machine_settings.csv + failures.csv
 
 import io
@@ -42,7 +36,57 @@ REPO_SPECS_PATH = DATA_DIR / "spec_limits.csv"
 def read_csv_bytes(file_bytes: bytes) -> pd.DataFrame:
     return pd.read_csv(io.BytesIO(file_bytes))
 
+def _finite_series(s: pd.Series) -> pd.Series:
+    s = pd.to_numeric(s, errors="coerce")
+    return s[np.isfinite(s)].dropna()
+
+def suggest_bounds(
+    s: pd.Series,
+    q_low: float = 0.05,
+    q_high: float = 0.95,
+    pad_frac: float = 0.10,
+    hard_min: float | None = None,
+    hard_max: float | None = None,
+):
+    """
+    Suggest bounds from historical data:
+      - base window = [q_low, q_high] quantiles
+      - pad by pad_frac * (q_high - q_low)
+      - optionally clamp to hard_min/hard_max
+    Returns: (lo, hi, meta_dict)
+    """
+    s = _finite_series(s)
+    if len(s) < 20:
+        lo = float(s.min()) if len(s) else 0.0
+        hi = float(s.max()) if len(s) else 1.0
+        span = max(hi - lo, 1e-9)
+        lo -= pad_frac * span
+        hi += pad_frac * span
+        src = "fallback(min/max)"
+    else:
+        lo_q = float(s.quantile(q_low))
+        hi_q = float(s.quantile(q_high))
+        span = max(hi_q - lo_q, 1e-9)
+        lo = lo_q - pad_frac * span
+        hi = hi_q + pad_frac * span
+        src = f"quantiles({q_low:.0%}-{q_high:.0%})+pad({pad_frac:.0%})"
+
+    if hard_min is not None:
+        lo = max(lo, float(hard_min))
+    if hard_max is not None:
+        hi = min(hi, float(hard_max))
+
+    if lo >= hi:
+        hi = lo + 1.0
+
+    meta = {"source": src, "n": int(len(s))}
+    return float(lo), float(hi), meta
+
 def optimize_parameters(model, X, y, target, bounds):
+    """
+    Fit model to (X,y), then find params within bounds that minimize squared error to target.
+    Returns (optimized_params, predicted_at_optimized) or (None, None)
+    """
     model.fit(X, y)
 
     def objective(params):
@@ -56,6 +100,7 @@ def optimize_parameters(model, X, y, target, bounds):
         optimized = np.array(result.x, dtype=float)
         predicted = float(model.predict(optimized.reshape(1, -1))[0])
         return optimized, predicted
+
     return None, None
 
 def build_model_dict(
@@ -148,7 +193,6 @@ def compute_results(
                 soft_upper = target * (1.0 + soft_tol_percent)
                 soft_pass = bool(soft_lower <= predicted <= soft_upper)
 
-                # in_spec supports one-sided if needed
                 if np.isfinite(lsl) and np.isfinite(usl):
                     in_spec = bool(lsl <= predicted <= usl)
                 elif np.isfinite(lsl):
@@ -183,7 +227,6 @@ def compute_results(
 
     results_df = pd.DataFrame(results).sort_values(["part_number", "machine_number"], kind="stable") if results else pd.DataFrame()
     failures_df = pd.DataFrame(failures, columns=["part_number", "machine_number", "reason"]) if failures else pd.DataFrame()
-
     return results_df, failures_df
 
 
@@ -196,7 +239,6 @@ st.caption("Optimize temperature / pressure / speed to hit target measurement (p
 with st.sidebar:
     st.header("Input files")
 
-    # DEFAULT to repo mode
     mode = st.radio(
         "Load from",
         ["Use repo data (default)", "Upload CSVs"],
@@ -204,7 +246,6 @@ with st.sidebar:
     )
 
     data_up = specs_up = None
-
     if mode == "Upload CSVs":
         data_up = st.file_uploader("Upload synthetic_process_data.csv", type=["csv"])
         specs_up = st.file_uploader("Upload spec_limits.csv", type=["csv"])
@@ -212,21 +253,6 @@ with st.sidebar:
         st.success("Using preset repo paths")
         st.code("data/synthetic_process_data.csv")
         st.code("data/spec_limits.csv")
-
-    st.divider()
-    st.header("Optimization bounds")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        t_min = st.number_input("Temp min", value=170.0, step=1.0)
-        p_min = st.number_input("Pressure min", value=45.0, step=0.5)
-        s_min = st.number_input("Speed min", value=1100.0, step=10.0)
-    with c2:
-        t_max = st.number_input("Temp max", value=200.0, step=1.0)
-        p_max = st.number_input("Pressure max", value=60.0, step=0.5)
-        s_max = st.number_input("Speed max", value=1300.0, step=10.0)
-
-    soft_tol_percent = st.slider("Soft tolerance (±%) around target", 0.0, 50.0, 10.0, 0.5) / 100.0
 
     st.divider()
     st.header("Models")
@@ -254,14 +280,11 @@ with st.sidebar:
         svr_epsilon = 0.1
 
     st.divider()
+    st.header("Targets")
+    soft_tol_percent_ui = st.slider("Soft tolerance (±%) around target", 0.0, 50.0, 10.0, 0.5)
+
+    st.divider()
     run_btn = st.button("Run optimization", type="primary")
-
-# Validate bounds
-if t_min >= t_max or p_min >= p_max or s_min >= s_max:
-    st.error("Bounds are invalid: each min must be strictly less than its max.")
-    st.stop()
-
-bounds = [(float(t_min), float(t_max)), (float(p_min), float(p_max)), (float(s_min), float(s_max))]
 
 model_choices = build_model_dict(
     use_lr=use_lr,
@@ -279,18 +302,14 @@ if not model_choices:
     st.warning("Select at least one model.")
     st.stop()
 
-if not run_btn:
-    st.info("Set inputs + bounds/models, then click **Run optimization**.")
-    st.stop()
-
 # ------------------------------
-# Load data
+# Load data (needed before bounds suggestion)
 # ------------------------------
 with st.spinner("Loading input data..."):
     try:
         if mode == "Upload CSVs":
             if data_up is None or specs_up is None:
-                st.error("Please upload both CSV files.")
+                st.info("Upload both CSV files, then click **Run optimization**.")
                 st.stop()
             data_df = read_csv_bytes(data_up.getvalue())
             specs_df = read_csv_bytes(specs_up.getvalue())
@@ -303,13 +322,77 @@ with st.spinner("Loading input data..."):
                 if DATA_DIR.exists():
                     st.write("Files in /data:", [p.name for p in DATA_DIR.iterdir()])
                 st.stop()
-
             data_df = pd.read_csv(REPO_DATA_PATH)
             specs_df = pd.read_csv(REPO_SPECS_PATH)
 
     except Exception as e:
         st.error(f"File load failed: {e}")
         st.stop()
+
+# ------------------------------
+# Bounds (auto-suggest from historical data, editable)
+# ------------------------------
+with st.sidebar:
+    st.header("Optimization bounds")
+
+    auto_bounds = st.checkbox("Auto-suggest bounds from historical data", value=True)
+    q_low = st.slider("Lower quantile", 0.0, 0.20, 0.05, 0.01)
+    q_high = st.slider("Upper quantile", 0.80, 1.0, 0.95, 0.01)
+    pad_frac = st.slider("Padding (% of span)", 0.0, 0.50, 0.10, 0.01)
+
+    # Optional: suggest bounds per part/machine
+    per_group = st.checkbox("Suggest bounds per selected Part+Machine", value=False)
+
+    if per_group and ("part_number" in data_df.columns) and ("machine_number" in data_df.columns):
+        parts = sorted(data_df["part_number"].dropna().astype(str).unique().tolist())
+        machines = sorted(data_df["machine_number"].dropna().astype(str).unique().tolist())
+        sel_part = st.selectbox("Part for bound suggestion", parts, index=0 if parts else 0)
+        sel_machine = st.selectbox("Machine for bound suggestion", machines, index=0 if machines else 0)
+        hist_df = data_df[(data_df["part_number"].astype(str) == str(sel_part)) &
+                          (data_df["machine_number"].astype(str) == str(sel_machine))]
+        if hist_df.empty:
+            hist_df = data_df
+            st.warning("No rows for selected Part+Machine; using all data for suggestion.")
+    else:
+        hist_df = data_df
+
+    if auto_bounds:
+        t_lo, t_hi, t_meta = suggest_bounds(hist_df.get("temperature", pd.Series(dtype=float)), q_low=q_low, q_high=q_high, pad_frac=pad_frac)
+        p_lo, p_hi, p_meta = suggest_bounds(hist_df.get("pressure", pd.Series(dtype=float)), q_low=q_low, q_high=q_high, pad_frac=pad_frac)
+        s_lo, s_hi, s_meta = suggest_bounds(hist_df.get("speed", pd.Series(dtype=float)), q_low=q_low, q_high=q_high, pad_frac=pad_frac)
+    else:
+        t_lo, t_hi = 170.0, 200.0
+        p_lo, p_hi = 45.0, 60.0
+        s_lo, s_hi = 1100.0, 1300.0
+        t_meta = p_meta = s_meta = {"source": "manual defaults", "n": int(len(hist_df))}
+
+    with st.expander("How were these bounds suggested?"):
+        st.write(f"Temperature: {t_meta['source']} (n={t_meta['n']})")
+        st.write(f"Pressure:    {p_meta['source']} (n={p_meta['n']})")
+        st.write(f"Speed:       {s_meta['source']} (n={s_meta['n']})")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        t_min = st.number_input("Temp min", value=float(t_lo), step=1.0)
+        p_min = st.number_input("Pressure min", value=float(p_lo), step=0.5)
+        s_min = st.number_input("Speed min", value=float(s_lo), step=10.0)
+    with c2:
+        t_max = st.number_input("Temp max", value=float(t_hi), step=1.0)
+        p_max = st.number_input("Pressure max", value=float(p_hi), step=0.5)
+        s_max = st.number_input("Speed max", value=float(s_hi), step=10.0)
+
+# Validate bounds
+if t_min >= t_max or p_min >= p_max or s_min >= s_max:
+    st.error("Invalid bounds: each min must be < max.")
+    st.stop()
+
+bounds = [(float(t_min), float(t_max)), (float(p_min), float(p_max)), (float(s_min), float(s_max))]
+soft_tol_percent = float(soft_tol_percent_ui) / 100.0
+
+# Stop until user runs
+if not run_btn:
+    st.info("Bounds/models loaded. Click **Run optimization** to compute.")
+    st.stop()
 
 # ------------------------------
 # Compute
@@ -320,7 +403,7 @@ with st.spinner("Optimizing per part + machine..."):
             data=data_df,
             specs=specs_df,
             bounds=bounds,
-            soft_tol_percent=float(soft_tol_percent),
+            soft_tol_percent=soft_tol_percent,
             model_choices=model_choices
         )
     except Exception as e:
@@ -378,5 +461,6 @@ with tabs[2]:
     st.dataframe(specs_df.head(200), use_container_width=True)
 
 st.caption(
-    "Deploy tip: commit your CSVs into /data for demo mode, or use Upload mode for real/variable data."
+    "Deploy tip: commit your CSVs into /data for demo mode, or use Upload mode for real/variable data. "
+    "Auto-suggested bounds are just defaults—always verify they’re within safe process limits."
 )
