@@ -1074,21 +1074,12 @@ if "bounds_default" not in st.session_state:
 if "bounds_overrides" not in st.session_state:
     st.session_state.bounds_overrides = {}
 
-# BUG FIX: Use session state flag instead of button state to persist across Streamlit Cloud reruns
-if is_dev:
-    if st.sidebar.button(
-        "Reset ALL default bounds to suggested",
-        use_container_width=True,
-        help="Recalculate all default bounds from historical data using the current quantile settings."
-    ):
-        # Set flag BEFORE rerun so it persists (crucial for Streamlit Cloud)
-        st.session_state["_should_reset_bounds"] = True
-        st.rerun()
-    
-    # Check if reset was requested from a previous button click
-    reset_defaults = st.session_state.get("_should_reset_bounds", False)
-else:
-    reset_defaults = False
+# BUG FIX: Simple button handling without complex rerun logic
+reset_defaults_clicked = st.sidebar.button(
+    "Reset ALL default bounds to suggested",
+    use_container_width=True,
+    help="Recalculate all default bounds from historical data using the current quantile settings."
+) if is_dev else False
 
 bounds_by_param: Dict[str, Tuple[float, float]] = {}
 default_meta: Dict[str, Dict] = {}
@@ -1107,7 +1098,7 @@ for pcol in param_cols:
 
     default_meta[pcol] = meta_b
 
-    if reset_defaults:
+    if reset_defaults_clicked:
         kmin = f"def_min__{pcol}"
         kmax = f"def_max__{pcol}"
         if kmin in st.session_state:
@@ -1121,15 +1112,10 @@ for pcol in param_cols:
     lo0, hi0 = st.session_state.bounds_default[pcol]
     bounds_by_param[pcol] = (float(lo0), float(hi0))
 
-# BUG FIX: Clear the reset flag after rerun so it doesn't keep resetting on every run
-if reset_defaults:
-    st.session_state["_should_reset_bounds"] = False  # Clear flag
-    st.rerun()
-
 # ---- Default bounds editor (global) — developer only ----
 if is_dev:
     # Open expander after reset or if user has been editing bounds
-    should_expand_bounds = reset_defaults or st.session_state.get("_bounds_edited", False)
+    should_expand_bounds = reset_defaults_clicked or st.session_state.get("_bounds_edited", False)
     
     with st.expander("Default bounds (apply to ALL Part–Machine combos unless overridden)", expanded=should_expand_bounds):
         st.caption("These are the **global defaults**. To set different bounds for a specific Part–Machine, use the override editor below.")
@@ -1235,12 +1221,6 @@ if is_dev:
             )
 
         if reset_this:
-            # BUG FIX: Set flag before rerun to persist on Streamlit Cloud
-            st.session_state["_should_reset_this"] = group_key
-            st.rerun()
-        
-        # Check if reset was requested from a previous button click
-        if st.session_state.get("_should_reset_this") == group_key:
             st.session_state.bounds_overrides.pop(group_key, None)
             for pcol in param_cols:
                 def_lo, def_hi = st.session_state.bounds_default[pcol]
@@ -1248,16 +1228,9 @@ if is_dev:
                 kmax = f"ov_max__{group_key[0]}__{group_key[1]}__{pcol}"
                 st.session_state[kmin] = float(def_lo)
                 st.session_state[kmax] = float(def_hi)
-            st.session_state["_should_reset_this"] = None  # Clear flag
             st.rerun()
 
         if reset_all:
-            # BUG FIX: Set flag before rerun to persist on Streamlit Cloud
-            st.session_state["_should_reset_all"] = True
-            st.rerun()
-        
-        # Check if reset was requested from a previous button click
-        if st.session_state.get("_should_reset_all", False):
             st.session_state.bounds_overrides = {}
             for k in list(st.session_state.keys()):
                 if isinstance(k, str) and (k.startswith("ov_min__") or k.startswith("ov_max__")):
@@ -1269,7 +1242,6 @@ if is_dev:
                             def_lo, def_hi = st.session_state.bounds_default[pcol]
                             st.session_state[k] = float(def_lo) if prefix == "ov_min__" else float(def_hi)
                             break
-            st.session_state["_should_reset_all"] = False  # Clear flag
             st.rerun()
 
         current_over = st.session_state.bounds_overrides.get(group_key, {})
