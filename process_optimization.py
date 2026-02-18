@@ -1121,7 +1121,6 @@ for pcol in param_cols:
 
 # ---- Default bounds editor (global) — developer only ----
 if is_dev:
-    st.subheader("Step 3 — Bounds (auto-suggested defaults, with per Part–Machine overrides)")
     st.warning(
         "⚠️ **Streamlit Cloud Limitation:** The reset buttons below may not work reliably on Streamlit Cloud. "
         "They work correctly when running locally. You can manually adjust bounds using the input fields instead."
