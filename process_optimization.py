@@ -655,9 +655,9 @@ with st.sidebar:
             svr_gamma = "scale"
             svr_epsilon = 0.1
     else:
-        # Simple mode: Random Forest only with sensible defaults
-        use_lr = False
-        use_rf = True
+        # Simple mode: Linear Regression only with sensible defaults
+        use_lr = True
+        use_rf = False
         use_svr = False
         rf_estimators = 200
         rf_random_state = 42
@@ -665,7 +665,7 @@ with st.sidebar:
         svr_c = 10.0
         svr_gamma = "scale"
         svr_epsilon = 0.1
-        st.caption("Using Random Forest (200 trees). Switch to Developer mode to change models.")
+        st.caption("Using Linear Regression. Switch to Developer mode to change models.")
 
     st.divider()
     st.header("Run settings")
