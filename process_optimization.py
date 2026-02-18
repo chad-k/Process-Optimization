@@ -1111,6 +1111,10 @@ for pcol in param_cols:
     lo0, hi0 = st.session_state.bounds_default[pcol]
     bounds_by_param[pcol] = (float(lo0), float(hi0))
 
+# BUG FIX: Trigger rerun after resetting defaults so UI widgets update
+if reset_defaults:
+    st.rerun()
+
 # ---- Default bounds editor (global) — developer only ----
 if is_dev:
     with st.expander("Default bounds (apply to ALL Part–Machine combos unless overridden)", expanded=False):
