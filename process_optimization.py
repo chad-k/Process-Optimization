@@ -579,6 +579,7 @@ Recommends **process parameter settings** (any number of parameters) to make a *
 ## Notes
 - Bounds are suggested from historical data, but you should keep them within safe operating limits.
 - If parameters don't align row-by-row, the app falls back to Part+Machine averages.
+- **Streamlit Cloud Limitation:** The reset buttons in Step 3 (Developer mode) work reliably when running locally but may not work on Streamlit Cloud. You can manually edit bounds instead or restart the app.
 
 Questions/issues: **{CONTACT_EMAIL}**
         """
@@ -1081,6 +1082,12 @@ reset_defaults_clicked = st.sidebar.button(
     help="Recalculate all default bounds from historical data using the current quantile settings."
 ) if is_dev else False
 
+if is_dev:
+    st.sidebar.warning(
+        "⚠️ **Known Issue:** The 'Reset' buttons work reliably when running locally (Spyder/IDE) but have inconsistent behavior on Streamlit Cloud. "
+        "As a workaround, manually edit the bounds in Step 3 or restart the app."
+    )
+
 bounds_by_param: Dict[str, Tuple[float, float]] = {}
 default_meta: Dict[str, Dict] = {}
 
@@ -1114,6 +1121,11 @@ for pcol in param_cols:
 
 # ---- Default bounds editor (global) — developer only ----
 if is_dev:
+    st.subheader("Step 3 — Bounds (auto-suggested defaults, with per Part–Machine overrides)")
+    st.warning(
+        "⚠️ **Streamlit Cloud Limitation:** The reset buttons below may not work reliably on Streamlit Cloud. "
+        "They work correctly when running locally. You can manually adjust bounds using the input fields instead."
+    )
     # Open expander after reset or if user has been editing bounds
     should_expand_bounds = reset_defaults_clicked or st.session_state.get("_bounds_edited", False)
     
