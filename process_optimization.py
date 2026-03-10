@@ -1072,13 +1072,29 @@ with tabs[0]:
     if results_df.empty:
         st.warning("No results produced. Check targets/spec match, bounds, parameter columns, and row counts.")
     else:
-        st.dataframe(results_df, use_container_width=True, height=520)
-        st.download_button(
-            "Download optimized_machine_settings.csv",
-            data=results_df.to_csv(index=False).encode("utf-8"),
-            file_name="optimized_machine_settings.csv",
-            mime="text/csv",
-        )
+        filter_in_spec = st.checkbox("Show only in-spec results", value=False, key="filter_in_spec")
+        
+        display_df = results_df[results_df["in_spec"] == True] if filter_in_spec else results_df
+        
+        st.dataframe(display_df, use_container_width=True, height=520)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(
+                "Download optimized_machine_settings.csv",
+                data=results_df.to_csv(index=False).encode("utf-8"),
+                file_name="optimized_machine_settings.csv",
+                mime="text/csv",
+            )
+        with col2:
+            in_spec_df = results_df[results_df["in_spec"] == True]
+            st.download_button(
+                "Download in-spec only results.csv",
+                data=in_spec_df.to_csv(index=False).encode("utf-8"),
+                file_name="optimized_machine_settings_in_spec.csv",
+                mime="text/csv",
+                disabled=(len(in_spec_df) == 0)
+            )
 
 with tabs[1]:
     st.subheader("Groups That Did Not Optimize")
